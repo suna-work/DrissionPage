@@ -14,7 +14,11 @@ from .._pages.chromium_frame import ChromiumFrame
 from .._pages.chromium_page import ChromiumPage
 
 
-class BaseWaiter(object):
+class OriginWaiter(object):
+    def __call__(self, second: float, scope: float = None) -> None: ...
+
+
+class BaseWaiter(OriginWaiter):
     def __init__(self, page: ChromiumBase):
         self._driver: ChromiumBase = ...
 
@@ -33,10 +37,11 @@ class BaseWaiter(object):
     def ele_hidden(self, loc_or_ele: Union[str, tuple, ChromiumElement], timeout: float = None,
                    raise_err: bool = None) -> bool: ...
 
-    def ele_loaded(self,
-                   locator: Union[Tuple[str, str], str],
-                   timeout: float = None,
-                   raise_err: bool = None) -> Union[bool, ChromiumElement]: ...
+    def eles_loaded(self,
+                    locators: Union[Tuple[str, str], str, list, tuple],
+                    timeout: float = None,
+                    any_one: bool = False,
+                    raise_err: bool = None) -> bool: ...
 
     def _loading(self, timeout: float = None, start: bool = True, gap: float = .01, raise_err: bool = None) -> bool: ...
 
@@ -73,10 +78,10 @@ class PageWaiter(TabWaiter):
     def all_downloads_done(self, timeout: float = None, cancel_if_timeout: bool = True) -> bool: ...
 
 
-class ElementWaiter(object):
-    def __init__(self, page: ChromiumBase, ele: ChromiumElement):
+class ElementWaiter(OriginWaiter):
+    def __init__(self, owner: ChromiumBase, ele: ChromiumElement):
         self._ele: ChromiumElement = ...
-        self._page: ChromiumBase = ...
+        self._owner: ChromiumBase = ...
 
     def __call__(self, second: float, scope: float = None) -> None: ...
 

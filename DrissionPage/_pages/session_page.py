@@ -5,6 +5,7 @@
 @Copyright: (c) 2024 by g1879, Inc. All Rights Reserved.
 @License  : BSD 3-Clause.
 """
+from copy import copy
 from pathlib import Path
 from re import search, DOTALL
 from time import sleep
@@ -17,7 +18,7 @@ from tldextract import extract
 from .._base.base import BasePage
 from .._configs.session_options import SessionOptions
 from .._elements.session_element import SessionElement, make_session_ele
-from .._functions.web import cookie_to_dict
+from .._functions.web import cookie_to_dict, format_headers
 from .._units.setter import SessionPageSetter
 
 
@@ -56,9 +57,9 @@ class SessionPage(BasePage):
 
         elif isinstance(session_or_options, Session):
             self._session_options = SessionOptions()
-            self._headers = session_or_options.headers
-            session_or_options.headers = None
-            self._session = session_or_options
+            self._session = copy(session_or_options)
+            self._headers = self._session.headers
+            self._session.headers = None
 
     def _s_set_runtime_settings(self):
         """设置运行时用到的属性"""
@@ -200,7 +201,7 @@ class SessionPage(BasePage):
         :param index: 获取第几个，从1开始，可传入负数获取倒数第几个
         :return: SessionElement对象或属性、文本
         """
-        return make_session_ele(self.html) if locator is None else self._ele(locator, index=index, method='s_ele()')
+        return make_session_ele(self) if locator is None else self._ele(locator, index=index, method='s_ele()')
 
     def s_eles(self, locator):
         """返回页面中符合条件的所有元素、属性或节点文本
@@ -221,7 +222,7 @@ class SessionPage(BasePage):
 
     def cookies(self, as_dict=False, all_domains=False, all_info=False):
         """返回cookies
-        :param as_dict: 是否以字典方式返回，False则以list返回
+        :param as_dict: 为True时以dict格式返回，为False时返回list且all_info无效
         :param all_domains: 是否返回所有域的cookies
         :param all_info: 是否返回所有信息，False则只返回name、value、domain
         :return: cookies信息
@@ -293,7 +294,7 @@ class SessionPage(BasePage):
         if 'headers' not in kwargs:
             kwargs['headers'] = {}
         else:
-            kwargs['headers'] = CaseInsensitiveDict(kwargs['headers'])
+            kwargs['headers'] = CaseInsensitiveDict(format_headers(kwargs['headers']))
 
         # 设置referer和host值
         parsed_url = urlparse(url)

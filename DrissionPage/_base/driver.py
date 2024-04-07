@@ -30,7 +30,7 @@ class Driver(object):
         self.address = address
         self.type = tab_type
         self.owner = owner
-        self._debug = False
+        # self._debug = False
         self.alert_flag = False  # 标记alert出现，跳过一条请求后复原
 
         self._websocket_url = f'ws://{address}/devtools/{tab_type}/{tab_id}'
@@ -180,7 +180,6 @@ class Driver(object):
     def run(self, _method, **kwargs):
         """执行cdp方法
         :param _method: cdp方法名
-        :param args: cdp参数
         :param kwargs: cdp参数
         :return: 执行结果
         """
@@ -202,7 +201,13 @@ class Driver(object):
         try:
             self._ws = create_connection(self._websocket_url, enable_multithread=True, suppress_origin=True)
         except WebSocketBadStatusException as e:
-            raise TargetNotFoundError(f'找不到页面：{self.id}。') if 'No such target id' in str(e) else e
+            txt = str(e)
+            if 'No such target id' in txt:
+                raise TargetNotFoundError(f'找不到页面：{self.id}。')
+            elif 'Handshake status 403 Forbidden' in txt:
+                raise RuntimeError('请升级websocket-client库。')
+            else:
+                raise e
         self._recv_th.start()
         self._handle_event_th.start()
         return True
@@ -224,14 +229,15 @@ class Driver(object):
             self._ws.close()
             self._ws = None
 
-        try:
-            while not self.event_queue.empty():
-                event = self.event_queue.get_nowait()
-                function = self.event_handlers.get(event['method'])
-                if function:
-                    function(**event['params'])
-        except:
-            pass
+        # try:
+        #     while not self.event_queue.empty():
+        #         event = self.event_queue.get_nowait()
+        #         function = self.event_handlers.get(event['method'])
+        #         if function:
+        #             function(**event['params'])
+        #         sleep(.1)
+        # except:
+        #     pass
 
         self.event_handlers.clear()
         self.method_results.clear()

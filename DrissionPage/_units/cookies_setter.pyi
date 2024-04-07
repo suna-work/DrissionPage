@@ -5,10 +5,8 @@
 @Copyright: (c) 2024 by g1879, Inc. All Rights Reserved.
 @License  : BSD 3-Clause.
 """
-from http.cookiejar import Cookie
+from http.cookiejar import Cookie, CookieJar
 from typing import Union
-
-from requests.cookies import RequestsCookieJar
 
 from .._pages.chromium_base import ChromiumBase
 from .._pages.chromium_tab import WebPageTab
@@ -17,11 +15,11 @@ from .._pages.web_page import WebPage
 
 
 class CookiesSetter(object):
-    _page: ChromiumBase
+    _owner: ChromiumBase
 
     def __init__(self, page: ChromiumBase): ...
 
-    def __call__(self, cookies: Union[RequestsCookieJar, Cookie, list, tuple, str, dict]) -> None: ...
+    def __call__(self, cookies: Union[CookieJar, Cookie, list, tuple, str, dict]) -> None: ...
 
     def remove(self, name: str, url: str = None, domain: str = None, path: str = None) -> None: ...
 
@@ -29,11 +27,11 @@ class CookiesSetter(object):
 
 
 class SessionCookiesSetter(object):
-    _page: SessionPage
+    _owner: SessionPage
 
     def __init__(self, page: SessionPage): ...
 
-    def __call__(self, cookies: Union[RequestsCookieJar, Cookie, list, tuple, str, dict]) -> None: ...
+    def __call__(self, cookies: Union[CookieJar, Cookie, list, tuple, str, dict]) -> None: ...
 
     def remove(self, name: str) -> None: ...
 
@@ -41,11 +39,11 @@ class SessionCookiesSetter(object):
 
 
 class WebPageCookiesSetter(CookiesSetter, SessionCookiesSetter):
-    _page: Union[WebPage, WebPageTab]
+    _owner: Union[WebPage, WebPageTab]
 
     def __init__(self, page: SessionPage): ...
 
-    def __call__(self, cookies: Union[RequestsCookieJar, Cookie, list, tuple, str, dict]) -> None: ...
+    def __call__(self, cookies: Union[CookieJar, Cookie, list, tuple, str, dict]) -> None: ...
 
     def remove(self, name: str, url: str = None, domain: str = None, path: str = None) -> None: ...
 

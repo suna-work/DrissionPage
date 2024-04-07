@@ -31,7 +31,7 @@ class WebPage(SessionPage, ChromiumPage, BasePage):
         """初始化函数
         :param mode: 'd' 或 's'，即driver模式和session模式
         :param timeout: 超时时间（秒），d模式时为寻找元素时间，s模式时为连接时间，默认10秒
-        :param chromium_options: Driver对象，只使用s模式时应传入False
+        :param chromium_options: ChromiumOptions对象，只使用s模式时应传入False
         :param session_or_options: Session对象或SessionOptions对象，只使用d模式时应传入False
         """
         if hasattr(self, '_created'):
@@ -298,7 +298,7 @@ class WebPage(SessionPage, ChromiumPage, BasePage):
 
     def cookies(self, as_dict=False, all_domains=False, all_info=False):
         """返回cookies
-        :param as_dict: 是否以字典方式返回，False以list形式返回
+        :param as_dict: 为True时以dict格式返回，为False时返回list且all_info无效
         :param all_domains: 是否返回所有域的cookies
         :param all_info: 是否返回所有信息，False则只返回name、value、domain
         :return: cookies信息
@@ -308,21 +308,51 @@ class WebPage(SessionPage, ChromiumPage, BasePage):
         elif self._mode == 'd':
             return super(SessionPage, self).cookies(as_dict, all_domains, all_info)
 
-    def get_tab(self, id_or_num=None):
-        """获取一个标签页对象
-        :param id_or_num: 要获取的标签页id或序号，为None时获取当前tab，序号不是视觉排列顺序，而是激活顺序
-        :return: 标签页对象
+    def get_tab(self, id_or_num=None, title=None, url=None, tab_type='page', as_id=False):
+        """获取一个标签页对象，id_or_num不为None时，后面几个参数无效
+        :param id_or_num: 要获取的标签页id或序号，序号从1开始，可传入负数获取倒数第几个，不是视觉排列顺序，而是激活顺序
+        :param title: 要匹配title的文本，模糊匹配，为None则匹配所有
+        :param url: 要匹配url的文本，模糊匹配，为None则匹配所有
+        :param tab_type: tab类型，可用列表输入多个，如 'page', 'iframe' 等，为None则匹配所有
+        :param as_id: 是否返回标签页id而不是标签页对象
+        :return: WebPageTab对象
         """
-        if isinstance(id_or_num, str):
-            return WebPageTab(self, id_or_num)
-        elif isinstance(id_or_num, int):
-            return WebPageTab(self, self.tabs[id_or_num])
-        elif id_or_num is None:
-            return WebPageTab(self, self.tab_id)
-        elif isinstance(id_or_num, WebPageTab):
-            return id_or_num
+        if id_or_num is not None:
+            if isinstance(id_or_num, str):
+                id_or_num = id_or_num
+            elif isinstance(id_or_num, int):
+                id_or_num = self.tab_ids[id_or_num - 1 if id_or_num > 0 else id_or_num]
+            elif isinstance(id_or_num, WebPageTab):
+                return id_or_num.tab_id if as_id else id_or_num
+
+        elif title == url == tab_type is None:
+            id_or_num = self.tab_id
+
         else:
-            raise TypeError(f'id_or_num需传入tab id或序号，非{id_or_num}。')
+            id_or_num = self._browser.find_tabs(title, url, tab_type)
+            if id_or_num:
+                id_or_num = id_or_num[0]['id']
+            else:
+                return None
+
+        if as_id:
+            return id_or_num
+
+        with self._lock:
+            return WebPageTab(self, id_or_num)
+
+    def get_tabs(self, title=None, url=None, tab_type='page', as_id=False):
+        """查找符合条件的tab，返回它们组成的列表
+        :param title: 要匹配title的文本，模糊匹配，为None则匹配所有
+        :param url: 要匹配url的文本，模糊匹配，为None则匹配所有
+        :param tab_type: tab类型，可用列表输入多个，如 'page', 'iframe' 等，为None则匹配所有
+        :param as_id: 是否返回标签页id而不是标签页对象
+        :return: ChromiumTab对象组成的列表
+        """
+        if as_id:
+            return [tab['id'] for tab in self._browser.find_tabs(title, url, tab_type)]
+        with self._lock:
+            return [WebPageTab(self, tab['id']) for tab in self._browser.find_tabs(title, url, tab_type)]
 
     def new_tab(self, url=None, new_window=False, background=False, new_context=False):
         """新建一个标签页
@@ -332,7 +362,7 @@ class WebPage(SessionPage, ChromiumPage, BasePage):
         :param new_context: 是否创建新的上下文
         :return: 新标签页对象
         """
-        tab = WebPageTab(self, tab_id=self._new_tab(new_window, background, new_context))
+        tab = WebPageTab(self, tab_id=self.browser.new_tab(new_window, background, new_context))
         if url:
             tab.get(url)
         return tab

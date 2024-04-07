@@ -10,7 +10,7 @@ from platform import system
 from shutil import rmtree
 from tempfile import gettempdir, TemporaryDirectory
 from threading import Lock
-from time import perf_counter
+from time import perf_counter, sleep
 
 from .._configs.options_manage import OptionsManager
 from ..errors import (ContextLostError, ElementLostError, CDPError, PageDisconnectedError, NoRectError,
@@ -107,7 +107,7 @@ def show_or_hide_browser(page, hide=True):
     except ImportError:
         raise ImportError('请先安装：pip install pypiwin32')
 
-    pid = page.process_id
+    pid = page._page.process_id
     if not pid:
         return None
     hds = get_hwnds_from_pid(pid, page.title)
@@ -177,6 +177,7 @@ def wait_until(function, kwargs=None, timeout=10):
         value = function(**kwargs)
         if value:
             return value
+        sleep(.01)
     raise TimeoutError
 
 
@@ -197,7 +198,8 @@ def raise_error(result, ignore=None):
     :return: None
     """
     error = result['error']
-    if error in ('Cannot find context with specified id', 'Inspected target navigated or closed'):
+    if error in ('Cannot find context with specified id', 'Inspected target navigated or closed',
+                 'No frame with given id found'):
         r = ContextLostError()
     elif error in ('Could not find node with given id', 'Could not find object with given id',
                    'No node with given id found', 'Node with given id does not belong to the document',
@@ -221,9 +223,8 @@ def raise_error(result, ignore=None):
         r = RuntimeError(f'你的浏览器可能太旧。\n方法：{result["method"]}\n参数：{result["args"]}')
     elif result['type'] in ('call_method_error', 'timeout'):
         from DrissionPage import __version__
-        from time import process_time
         txt = f'\n错误：{result["error"]}\n方法：{result["method"]}\n参数：{result["args"]}\n' \
-              f'版本：{__version__}\n运行时间：{process_time()}\n出现这个错误可能意味着程序有bug，请把错误信息和重现方法' \
+              f'版本：{__version__}\n出现这个错误可能意味着程序有bug，请把错误信息和重现方法' \
               '告知作者，谢谢。\n报告网站：https://gitee.com/g1879/DrissionPage/issues'
         r = TimeoutError(txt) if result['type'] == 'timeout' else CDPError(txt)
     else:

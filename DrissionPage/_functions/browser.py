@@ -94,12 +94,12 @@ def get_launch_args(opt):
         opt.set_user_data_path(path)
         result.add(f'--user-data-dir={path}')
 
-    if headless is None and system().lower() == 'linux':
-        from os import popen
-        r = popen('systemctl list-units | grep graphical.target')
-        if 'graphical.target' not in r.read():
-            headless = True
-            result.add('--headless=new')
+    # if headless is None and system().lower() == 'linux':  # 无界面Linux自动加入无头
+    #     from os import popen
+    #     r = popen('systemctl list-units | grep graphical.target')
+    #     if 'graphical.target' not in r.read():
+    #         headless = True
+    #         result.add('--headless=new')
 
     result = list(result)
     opt._headless = headless
@@ -176,8 +176,8 @@ def set_flags(opt):
             states_dict = load(f)
         except JSONDecodeError:
             states_dict = {}
-        flags_list = [] if opt.clear_file_flags else states_dict.setdefault(
-            'browser', {}).setdefault('enabled_labs_experiments', [])
+        states_dict.setdefault('browser', {}).setdefault('enabled_labs_experiments', [])
+        flags_list = [] if opt.clear_file_flags else states_dict['browser']['enabled_labs_experiments']
         flags_dict = {}
         for i in flags_list:
             f = str(i).split('@', 1)

@@ -90,7 +90,7 @@ class WebPage(SessionPage, ChromiumPage, BasePage):
             params: dict | None = ...,
             data: Union[dict, str, None] = ...,
             json: Union[dict, str, None] = ...,
-            headers: dict | None = ...,
+            headers: Union[dict, str, None] = ...,
             cookies: Any | None = ...,
             files: Any | None = ...,
             auth: Any | None = ...,
@@ -127,7 +127,18 @@ class WebPage(SessionPage, ChromiumPage, BasePage):
                 all_domains: bool = False,
                 all_info: bool = False) -> Union[dict, list]: ...
 
-    def get_tab(self, id_or_num: Union[str, WebPageTab, int] = None) -> WebPageTab: ...
+    def get_tab(self,
+                id_or_num: Union[str, WebPageTab, int] = None,
+                title: str = None,
+                url: str = None,
+                tab_type: Union[str, list, tuple] = 'page',
+                as_id: bool = False) -> Union[WebPageTab, str, None]: ...
+
+    def get_tabs(self,
+                 title: str = None,
+                 url: str = None,
+                 tab_type: Union[str, list, tuple] = 'page',
+                 as_id: bool = False) -> Union[List[WebPageTab], List[str]]: ...
 
     def new_tab(self,
                 url: str = None,
@@ -151,7 +162,7 @@ class WebPage(SessionPage, ChromiumPage, BasePage):
              timeout: float | None = ...,
              params: dict | None = ...,
              json: Union[dict, str, None] = ...,
-             headers: dict | None = ...,
+             headers: Union[dict, str, None] = ...,
              cookies: Any | None = ...,
              files: Any | None = ...,
              auth: Any | None = ...,
@@ -161,6 +172,9 @@ class WebPage(SessionPage, ChromiumPage, BasePage):
              stream: Any | None = ...,
              verify: Any | None = ...,
              cert: Any | None = ...) -> Union[bool, Response]: ...
+
+    @property
+    def latest_tab(self) -> Union[WebPageTab, WebPage]: ...
 
     @property
     def set(self) -> WebPageSetter: ...

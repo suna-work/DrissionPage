@@ -37,10 +37,12 @@ class Clicker(object):
         :return: 是否点击成功
         """
         if self._ele.tag == 'option':
-            if self._ele.states.is_selected:
-                self._ele.parent('t:select').select.cancel_by_option(self._ele)
-            else:
+            if not self._ele.states.is_selected:
                 self._ele.parent('t:select').select.by_option(self._ele)
+            else:
+                select = self._ele.parent('t:select')
+                if select.select.is_multi:
+                    self._ele.parent('t:select').select.cancel_by_option(self._ele)
             return
 
         if not by_js:  # 模拟点击
@@ -183,17 +185,6 @@ class Clicker(object):
         if not tid:
             raise RuntimeError('没有出现新标签页。')
         return self._ele.page.get_tab(tid)
-
-    def for_new_tab(self, by_js=False):
-        """点击后等待新tab出现并返回其对象
-        :param by_js: 是否使用js点击，逻辑与click()一致
-        :return: 新标签页对象，如果没有等到新标签页出现则抛出异常
-        """
-        self.left(by_js=by_js)
-        tid = self._ele.page._page.wait.new_tab()
-        if not tid:
-            raise RuntimeError('没有出现新标签页。')
-        return self._ele.page._page.get_tab(tid)
 
     def _click(self, client_x, client_y, button='left', count=1):
         """实施点击

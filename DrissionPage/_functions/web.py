@@ -7,11 +7,10 @@
 """
 from datetime import datetime
 from html import unescape
-from http.cookiejar import Cookie
+from http.cookiejar import Cookie, CookieJar
 from re import sub
 from urllib.parse import urlparse, urljoin, urlunparse
 
-from requests.cookies import RequestsCookieJar
 from tldextract import extract
 
 
@@ -97,7 +96,7 @@ def location_in_viewport(page, loc_x, loc_y):
     :param loc_y: 页面绝对坐标y
     :return: bool
     """
-    js = f'''function(){{var x = {loc_x}; var y = {loc_y};
+    js = f'''function(){{let x = {loc_x}; let y = {loc_y};
     const scrollLeft = document.documentElement.scrollLeft;
     const scrollTop = document.documentElement.scrollTop;
     const vWidth = document.documentElement.clientWidth;
@@ -181,17 +180,14 @@ def cookie_to_dict(cookie):
         cookie_dict = cookie
 
     elif isinstance(cookie, str):
-        cookie = cookie.rstrip(';,').split(',' if ',' in cookie else ';')
         cookie_dict = {}
-
-        for key, attr in enumerate(cookie):
-            attr_val = attr.lstrip().split('=', 1)
-
-            if key == 0:
+        for attr in cookie.strip().rstrip(';,').split(',' if ',' in cookie else ';'):
+            attr_val = attr.strip().split('=', 1)
+            if attr_val[0] in ('domain', 'path', 'expires', 'max-age', 'HttpOnly', 'secure', 'expiry', 'name', 'value'):
+                cookie_dict[attr_val[0]] = attr_val[1] if len(attr_val) == 2 else ''
+            else:
                 cookie_dict['name'] = attr_val[0]
                 cookie_dict['value'] = attr_val[1] if len(attr_val) == 2 else ''
-            else:
-                cookie_dict[attr_val[0]] = attr_val[1] if len(attr_val) == 2 else ''
 
         return cookie_dict
 
@@ -206,17 +202,24 @@ def cookies_to_tuple(cookies):
     :param cookies: cookies信息，可为CookieJar, list, tuple, str, dict
     :return: 返回tuple形式的cookies
     """
-    if isinstance(cookies, (list, tuple, RequestsCookieJar)):
+    if isinstance(cookies, (list, tuple, CookieJar)):
         cookies = tuple(cookie_to_dict(cookie) for cookie in cookies)
 
     elif isinstance(cookies, str):
-        cookies = tuple(cookie_to_dict(c.lstrip()) for c in cookies.rstrip(';,').split(',' if ',' in cookies else ';'))
+        c_dict = {}
+        for attr in cookies.strip().rstrip(';, ').split(',' if ',' in cookies else ';'):
+            attr_val = attr.strip().split('=', 1)
+            c_dict[attr_val[0]] = attr_val[1] if len(attr_val) == 2 else True
+        cookies = _dict_cookies_to_tuple(c_dict)
 
     elif isinstance(cookies, dict):
-        cookies = tuple({'name': cookie, 'value': cookies[cookie]} for cookie in cookies)
+        cookies = _dict_cookies_to_tuple(cookies)
+
+    elif isinstance(cookies, Cookie):
+        cookies = (cookie_to_dict(cookies),)
 
     else:
-        raise TypeError('cookies参数必须为RequestsCookieJar、list、tuple、str或dict类型。')
+        raise TypeError('cookies参数必须为Cookie、CookieJar、list、tuple、str或dict类型。')
 
     return cookies
 
@@ -227,8 +230,7 @@ def set_session_cookies(session, cookies):
     :param cookies: cookies信息
     :return: None
     """
-    cookies = cookies_to_tuple(cookies)
-    for cookie in cookies:
+    for cookie in cookies_to_tuple(cookies):
         if cookie['value'] is None:
             cookie['value'] = ''
 
@@ -276,15 +278,19 @@ def set_browser_cookies(page, cookies):
             cookie['value'] = ''
         elif not isinstance(cookie['value'], str):
             cookie['value'] = str(cookie['value'])
-        if cookie['name'].startswith('__Secure-'):
-            cookie['secure'] = True
 
         if cookie['name'].startswith('__Host-'):
             cookie['path'] = '/'
             cookie['secure'] = True
-            cookie['url'] = page.url
+            if not page.url.startswith('http'):
+                cookie['name'] = cookie['name'].replace('__Host-', '__Secure-', 1)
+            else:
+                cookie['url'] = page.url
             page.run_cdp_loaded('Network.setCookie', **cookie)
             continue  # 不用设置域名，可退出
+
+        if cookie['name'].startswith('__Secure-'):
+            cookie['secure'] = True
 
         if cookie.get('domain', None):
             try:
@@ -294,7 +300,10 @@ def set_browser_cookies(page, cookies):
             except Exception:
                 pass
 
-        ex_url = extract(page._browser_url)
+        url = page._browser_url
+        if not url.startswith('http'):
+            raise RuntimeError(f'未设置域名，请设置cookie的domain参数或先访问一个网站。{cookie}')
+        ex_url = extract(url)
         d_list = ex_url.subdomain.split('.')
         d_list.append(f'{ex_url.domain}.{ex_url.suffix}' if ex_url.suffix else ex_url.domain)
 
@@ -342,10 +351,10 @@ def get_blob(page, url, as_bytes=True):
     js = """
        function fetchData(url) {
       return new Promise((resolve, reject) => {
-        var xhr = new XMLHttpRequest();
+        let xhr = new XMLHttpRequest();
         xhr.responseType = 'blob';
         xhr.onload = function() {
-          var reader  = new FileReader();
+          let reader  = new FileReader();
           reader.onloadend = function(){resolve(reader.result);}
           reader.readAsDataURL(xhr.response);
         };
@@ -370,6 +379,7 @@ def tree(ele_or_page):
     :param ele_or_page: 页面或元素对象
     :return: None
     """
+
     def _tree(obj, last_one=True, body=''):
         list_ele = obj.children()
         length = len(list_ele)
@@ -394,3 +404,30 @@ def tree(ele_or_page):
     attrs = ' '.join([f"{k}='{v}'" for k, v in ele.attrs.items()])
     print(f'<{ele.tag} {attrs}>'.replace('\n', ' '))
     _tree(ele)
+
+
+def format_headers(txt):
+    """从浏览器复制的文本生成dict格式headers，文本用换行分隔
+    :param txt: 从浏览器复制的原始文本格式headers
+    :return: dict格式headers
+    """
+    if not isinstance(txt, str):
+        return txt
+    headers = {}
+    for header in txt.split('\n'):
+        if header:
+            name, value = header.split(': ', maxsplit=1)
+            headers[name] = value
+    return headers
+
+
+def _dict_cookies_to_tuple(cookies: dict):
+    """把dict形式的cookies转换为tuple形式
+    :param cookies: 单个或多个cookies，单个时包含'name'和'value'
+    :return: 多个dict格式cookies组成的列表
+    """
+    if 'name' in cookies and 'value' in cookies:  # 单个cookie
+        return (cookies,)
+    keys = ('domain', 'path', 'expires', 'max-age', 'HttpOnly', 'secure', 'expiry')
+    template = {k: v for k, v in cookies.items() if k in keys}
+    return tuple(dict(**{'name': k, 'value': v}, **template) for k, v in cookies.items() if k not in keys)

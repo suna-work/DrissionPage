@@ -102,7 +102,8 @@ class ElementRect(object):
         :return: 四个角坐标
         """
         return self._ele.owner.run_cdp('DOM.getBoxModel', backendNodeId=self._ele._backend_id,
-                                       nodeId=self._ele._node_id, objectId=self._ele._obj_id)['model'][quad]
+                                       # nodeId=self._ele._node_id, objectId=self._ele._obj_id
+                                       )['model'][quad]
 
     def _get_page_coord(self, x, y):
         """根据视口坐标获取绝对坐标"""
@@ -113,12 +114,15 @@ class ElementRect(object):
 
 
 class TabRect(object):
-    def __init__(self, page):
-        self._page = page
+    def __init__(self, owner):
+        """
+        :param owner: Page对象和Tab对象
+        """
+        self._owner = owner
 
     @property
     def window_state(self):
-        """返回窗口状态：normal、fullscreen、maximized、 minimized"""
+        """返回窗口状态：normal、fullscreen、maximized、minimized"""
         return self._get_window_rect()['windowState']
 
     @property
@@ -170,23 +174,26 @@ class TabRect(object):
     @property
     def viewport_size_with_scrollbar(self):
         """返回视口宽高，包括滚动条，格式：(宽, 高)"""
-        r = self._page.run_js('return window.innerWidth.toString() + " " + window.innerHeight.toString();')
+        r = self._owner.run_js('return window.innerWidth.toString() + " " + window.innerHeight.toString();')
         w, h = r.split(' ')
         return int(w), int(h)
 
     def _get_page_rect(self):
         """获取页面范围信息"""
-        return self._page.run_cdp_loaded('Page.getLayoutMetrics')
+        return self._owner.run_cdp_loaded('Page.getLayoutMetrics')
 
     def _get_window_rect(self):
         """获取窗口范围信息"""
-        return self._page.browser.get_window_bounds(self._page.tab_id)
+        return self._owner.browser.get_window_bounds(self._owner.tab_id)
 
 
 class FrameRect(object):
     """异域iframe使用"""
 
     def __init__(self, frame):
+        """
+        :param frame: ChromiumFrame对象
+        """
         self._frame = frame
 
     @property

@@ -8,7 +8,7 @@
 from time import sleep, perf_counter
 
 from ..errors import AlertExistsError
-from .._functions.keys import modifierBit, keyDescriptionForString, input_text_or_keys, Keys
+from .._functions.keys import modifierBit, keyDescriptionForString, input_text_or_keys, Keys, keyDefinitions
 from .._functions.web import location_in_viewport
 
 
@@ -274,18 +274,23 @@ class Actions:
         return self
 
     def type(self, keys):
-        """用模拟键盘按键方式输入文本，可输入字符串，也可输入组合键，只能输入键盘上有的字符
+        """用模拟键盘按键方式输入文本，可输入字符串，也可输入组合键
         :param keys: 要按下的按键，特殊字符和多个文本可用list或tuple传入
         :return: self
         """
         modifiers = []
         for i in keys:
             for character in i:
-                self.key_down(character)
-                if character in ('\ue009', '\ue008', '\ue00a', '\ue03d'):
-                    modifiers.append(character)
+                if character in keyDefinitions:
+                    self.key_down(character)
+                    if character in ('\ue009', '\ue008', '\ue00a', '\ue03d'):
+                        modifiers.append(character)
+                    else:
+                        self.key_up(character)
+
                 else:
-                    self.key_up(character)
+                    self.owner.run_cdp('Input.dispatchKeyEvent', type='char', text=character)
+
         for m in modifiers:
             self.key_up(m)
         return self
@@ -298,9 +303,13 @@ class Actions:
         input_text_or_keys(self.owner, text)
         return self
 
-    def wait(self, second):
-        """等待若干秒"""
-        sleep(second)
+    def wait(self, second, scope=None):
+        """等待若干秒，如传入两个参数，等待时间为这两个数间的一个随机数
+        :param second: 秒数
+        :param scope: 随机数范围
+        :return: None
+        """
+        self.owner.wait(second=second, scope=scope)
         return self
 
     def _get_key_data(self, key, action):

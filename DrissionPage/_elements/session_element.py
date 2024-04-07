@@ -37,17 +37,25 @@ class SessionElement(DrissionElement):
         attrs = [f"{k}='{v}'" for k, v in self.attrs.items()]
         return f'<SessionElement {self.tag} {" ".join(attrs)}>'
 
-    def __call__(self, locator, timeout=None):
+    def __call__(self, locator, index=1, timeout=None):
         """在内部查找元素
         例：ele2 = ele1('@id=ele_id')
         :param locator: 元素的定位信息，可以是loc元组，或查询字符串
+        :param index: 第几个元素，从1开始，可传入负数获取倒数第几个
         :param timeout: 不起实际作用
         :return: SessionElement对象或属性、文本
         """
-        return self.ele(locator)
+        return self.ele(locator, index=index)
 
     def __eq__(self, other):
         return self.xpath == getattr(other, 'xpath', None)
+
+    def __getattr__(self, item):
+        """获取元素属性
+        :param item: 属性名
+        :return: 属性值
+        """
+        return self.attr(item)
 
     @property
     def tag(self):
@@ -199,12 +207,12 @@ class SessionElement(DrissionElement):
             # 若为链接为None、js或邮件，直接返回
             if not link or link.lower().startswith(('javascript:', 'mailto:')):
                 return link
-
             else:  # 其它情况直接返回绝对url
-                return make_absolute_link(link, self.owner.url)
+                return make_absolute_link(link, self.owner.url) if self.owner else link
 
         elif name == 'src':
-            return make_absolute_link(self.inner_ele.get('src'), self.owner.url)
+            return make_absolute_link(self.inner_ele.get('src'),
+                                      self.owner.url) if self.owner else self.inner_ele.get('src')
 
         elif name == 'text':
             return self.text
@@ -349,6 +357,10 @@ def make_session_ele(html_or_ele, loc=None, index=1):
             if html_or_ele._doc_id else html_or_ele.owner.html
         html_or_ele = fromstring(html)
         html_or_ele = html_or_ele.xpath(xpath)[0]
+
+    elif html_or_ele._type == 'ChromiumFrame':
+        page = html_or_ele
+        html_or_ele = fromstring(html_or_ele.inner_html)
 
     # 各种页面对象
     elif isinstance(html_or_ele, BasePage):

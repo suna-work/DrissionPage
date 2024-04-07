@@ -5,6 +5,7 @@
 @Copyright: (c) 2024 by g1879, Inc. All Rights Reserved.
 @License  : BSD 3-Clause.
 """
+from os import waitpid
 from pathlib import Path
 from shutil import rmtree
 from time import perf_counter, sleep
@@ -72,7 +73,9 @@ class Browser(object):
         :param owner: 使用该驱动的对象
         :return: Driver对象
         """
-        d = self._drivers.pop(tab_id, Driver(tab_id, 'page', self.address))
+        d = self._drivers.pop(tab_id, None)
+        if not d:
+            d = Driver(tab_id, 'page', self.address)
         d.owner = owner
         self._all_drivers.setdefault(tab_id, set()).add(d)
         return d
@@ -129,7 +132,7 @@ class Browser(object):
         return len([i for i in j if i['type'] in ('page', 'webview') and not i['url'].startswith('devtools://')])
 
     @property
-    def tabs(self):
+    def tab_ids(self):
         """返回所有标签页id组成的列表"""
         j = self._driver.get(f'http://{self.address}/json').json()  # 不要改用cdp，因为顺序不对
         return [i['id'] for i in j if i['type'] in ('page', 'webview') and not i['url'].startswith('devtools://')]
@@ -139,13 +142,12 @@ class Browser(object):
         """返回浏览器进程id"""
         return self._process_id
 
-    def find_tabs(self, title=None, url=None, tab_type=None, single=True):
-        """查找符合条件的tab，返回它们的id组成的列表
+    def find_tabs(self, title=None, url=None, tab_type=None):
+        """查找符合条件的tab，返回它们组成的列表
         :param title: 要匹配title的文本
         :param url: 要匹配url的文本
         :param tab_type: tab类型，可用列表输入多个
-        :param single: 是否返回首个结果的id，为False返回所有信息
-        :return: tab id或tab列表
+        :return: dict格式的tab信息列表列表
         """
         tabs = self._driver.get(f'http://{self.address}/json').json()  # 不要改用cdp
 
@@ -156,9 +158,8 @@ class Browser(object):
         elif tab_type is not None:
             raise TypeError('tab_type只能是set、list、tuple、str、None。')
 
-        r = [i for i in tabs if ((title is None or title in i['title']) and (url is None or url in i['url'])
-                                 and (tab_type is None or i['type'] in tab_type))]
-        return r[0]['id'] if r and single else r
+        return [i for i in tabs if ((title is None or title in i['title']) and (url is None or url in i['url'])
+                                    and (tab_type is None or i['type'] in tab_type))]
 
     def close_tab(self, tab_id):
         """关闭标签页
@@ -190,6 +191,30 @@ class Browser(object):
         """
         return self.run_cdp('Browser.getWindowForTarget', targetId=tab_id or self.id)['bounds']
 
+    def new_tab(self, new_window=False, background=False, new_context=False):
+        """新建一个标签页
+        :param new_window: 是否在新窗口打开标签页
+        :param background: 是否不激活新标签页，如new_window为True则无效
+        :param new_context: 是否创建新的上下文
+        :return: 新标签页id
+        """
+        bid = None
+        if new_context:
+            bid = self.run_cdp('Target.createBrowserContext')['browserContextId']
+
+        kwargs = {'url': ''}
+        if new_window:
+            kwargs['newWindow'] = True
+        if background:
+            kwargs['background'] = True
+        if bid:
+            kwargs['browserContextId'] = bid
+
+        tid = self.run_cdp('Target.createTarget', **kwargs)['targetId']
+        while tid not in self._drivers:
+            sleep(.1)
+        return tid
+
     def reconnect(self):
         """断开重连"""
         self._driver.stop()
@@ -205,21 +230,31 @@ class Browser(object):
         :param force: 是否立刻强制终止进程
         :return: None
         """
-        pids = [pid['id'] for pid in self.run_cdp('SystemInfo.getProcessInfo')['processInfo']]
-        for tab in self._all_drivers.values():
+        try:
+            self.run_cdp('Browser.close')
+        except PageDisconnectedError:
+            pass
+        self.driver.stop()
+
+        drivers = list(self._all_drivers.values())
+        for tab in drivers:
             for driver in tab:
                 driver.stop()
 
-        if force:
-            from psutil import Process
-            for pid in pids:
-                Process(pid).kill()
-        else:
+        if not force:
+            return
+
+        try:
+            pids = [pid['id'] for pid in self.run_cdp('SystemInfo.getProcessInfo')['processInfo']]
+        except:
+            return
+
+        from psutil import Process
+        for pid in pids:
             try:
-                self.run_cdp('Browser.close')
-                self.driver.stop()
-            except PageDisconnectedError:
-                self.driver.stop()
+                Process(pid).kill()
+            except:
+                pass
 
         from os import popen
         from platform import system
@@ -239,6 +274,10 @@ class Browser(object):
 
             if ok:
                 break
+            sleep(.05)
+
+        if self.process_id:
+            waitpid(self.process_id, 0)
 
     def _on_disconnect(self):
         self.page._on_disconnect()
@@ -254,3 +293,4 @@ class Browser(object):
                     break
                 except (PermissionError, FileNotFoundError, OSError):
                     pass
+                sleep(.05)

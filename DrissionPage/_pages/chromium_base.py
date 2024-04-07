@@ -30,7 +30,7 @@ from .._units.scroller import PageScroller
 from .._units.setter import ChromiumBaseSetter
 from .._units.states import PageStates
 from .._units.waiter import BaseWaiter
-from ..errors import ContextLostError, CDPError, PageDisconnectedError, ElementNotFoundError
+from ..errors import ContextLostError, CDPError, PageDisconnectedError, ElementNotFoundError, ElementLostError
 
 __ERROR__ = 'error'
 
@@ -156,21 +156,25 @@ class ChromiumBase(BasePage):
         if self._is_reading:
             return
         self._is_reading = True
-        timeout = timeout if timeout >= .5 else .5
+        timeout = max(timeout, 2)
         end_time = perf_counter() + timeout
         while perf_counter() < end_time:
             try:
                 b_id = self.run_cdp('DOM.getDocument', _timeout=timeout)['root']['backendNodeId']
                 timeout = end_time - perf_counter()
-                timeout = .5 if timeout <= 0 else timeout
+                timeout = 1 if timeout <= 1 else timeout
                 self._root_id = self.run_cdp('DOM.resolveNode', backendNodeId=b_id,
                                              _timeout=timeout)['object']['objectId']
                 result = True
                 break
 
+            except PageDisconnectedError:
+                result = False
+                break
             except:
                 timeout = end_time - perf_counter()
                 timeout = .5 if timeout <= 0 else timeout
+            sleep(.1)
 
         else:
             result = False
@@ -474,7 +478,7 @@ class ChromiumBase(BasePage):
 
     def cookies(self, as_dict=False, all_domains=False, all_info=False):
         """返回cookies信息
-        :param as_dict: 为True时返回由{name: value}键值对组成的dict，为True时返回list且all_info无效
+        :param as_dict: 为True时以dict格式返回，为False时返回list且all_info无效
         :param all_domains: 是否返回所有域的cookies
         :param all_info: 是否返回所有信息，为False时只返回name、value、domain
         :return: cookies信息
@@ -667,32 +671,62 @@ class ChromiumBase(BasePage):
             return
         ele = self._ele(loc_or_ele, raise_err=False)
         if ele:
-            self.run_cdp('DOM.removeNode', nodeId=ele._node_id)
+            self.run_cdp('DOM.removeNode', nodeId=ele._node_id, _ignore=ElementLostError)
 
-    def add_ele(self, outerHTML, insert_to=None, before=None):
+    def add_ele(self, html_or_info, insert_to=None, before=None):
         """新建一个元素
-        :param outerHTML: 新元素的html文本
-        :param insert_to: 插入到哪个元素中，可接收元素对象和定位符，为None添加到body
+        :param html_or_info: 新元素的html文本或信息。信息格式为：(tag, {attr1: value, ...})
+        :param insert_to: 插入到哪个元素中，可接收元素对象和定位符，为None且为html添加到body，不为html不插入
         :param before: 在哪个子节点前面插入，可接收对象和定位符，为None插入到父元素末尾
         :return: 元素对象
         """
-        insert_to = self.ele(insert_to) if insert_to else self.ele('t:body')
-        args = [outerHTML, insert_to]
-        if before:
-            args.append(self.ele(before))
-            js = '''
-                 ele = document.createElement(null);
-                 arguments[1].insertBefore(ele, arguments[2]);
-                 ele.outerHTML = arguments[0];
-                 return arguments[2].previousElementSibling;
-                 '''
+        if isinstance(html_or_info, str):
+            insert_to = self.ele(insert_to) if insert_to else self.ele('t:body')
+            args = [html_or_info, insert_to]
+            if before:
+                args.append(self.ele(before))
+                js = '''
+                     ele = document.createElement(null);
+                     arguments[1].insertBefore(ele, arguments[2]);
+                     ele.outerHTML = arguments[0];
+                     return arguments[2].previousElementSibling;
+                     '''
+            else:
+                js = '''
+                     ele = document.createElement(null);
+                     arguments[1].appendChild(ele);
+                     ele.outerHTML = arguments[0];
+                     return arguments[1].lastElementChild;
+                     '''
+
+        elif isinstance(html_or_info, tuple):
+            args = [html_or_info[0], html_or_info[1]]
+            txt = ''
+            if insert_to:
+                args.append(self.ele(insert_to))
+                if before:
+                    args.append(self.ele(before))
+                    txt = '''
+                         arguments[2].insertBefore(ele, arguments[3]);
+                         '''
+                else:
+                    txt = '''
+                         arguments[2].appendChild(ele);
+                         '''
+            js = f'''
+                     ele = document.createElement(arguments[0]);
+                     for(let k in arguments[1]){{
+                        if(k=="innerHTML"){{ele.innerHTML=arguments[1][k]}}
+                        else if(k=="innerText"){{ele.innerText=arguments[1][k]}}
+                        else{{ele.setAttribute(k, arguments[1][k]);}}
+                     }}
+                     {txt}
+                     return ele;
+                     '''
+
         else:
-            js = '''
-                 ele = document.createElement(null);
-                 arguments[1].appendChild(ele);
-                 ele.outerHTML = arguments[0];
-                 return arguments[1].lastElementChild;
-                 '''
+            raise TypeError('html_or_info参数必须是html文本或tuple，tuple格式为(tag, {name: value})。')
+
         ele = self.run_js(js, *args)
         return ele
 
@@ -753,42 +787,16 @@ class ChromiumBase(BasePage):
         :param item: 要获取的项，不设置则返回全部
         :return: sessionStorage一个或所有项内容
         """
-        if item:
-            js = f'sessionStorage.getItem("{item}");'
-            return self.run_js_loaded(js, as_expr=True)
-        else:
-            js = '''
-            var dp_ls_len = sessionStorage.length;
-            var dp_ls_arr = new Array();
-            for(var i = 0; i < dp_ls_len; i++) {
-                var getKey = sessionStorage.key(i);
-                var getVal = sessionStorage.getItem(getKey);
-                dp_ls_arr[i] = {'key': getKey, 'val': getVal}
-            }
-            return dp_ls_arr;
-            '''
-            return {i['key']: i['val'] for i in self.run_js_loaded(js)}
+        js = f'sessionStorage.getItem("{item}")' if item else 'sessionStorage'
+        return self.run_js_loaded(js, as_expr=True)
 
     def local_storage(self, item=None):
         """返回localStorage信息，不设置item则获取全部
         :param item: 要获取的项目，不设置则返回全部
         :return: localStorage一个或所有项内容
         """
-        if item:
-            js = f'localStorage.getItem("{item}");'
-            return self.run_js_loaded(js, as_expr=True)
-        else:
-            js = '''
-            var dp_ls_len = localStorage.length;
-            var dp_ls_arr = new Array();
-            for(var i = 0; i < dp_ls_len; i++) {
-                var getKey = localStorage.key(i);
-                var getVal = localStorage.getItem(getKey);
-                dp_ls_arr[i] = {'key': getKey, 'val': getVal}
-            }
-            return dp_ls_arr;
-            '''
-            return {i['key']: i['val'] for i in self.run_js_loaded(js)}
+        js = f'localStorage.getItem("{item}")' if item else 'localStorage'
+        return self.run_js_loaded(js, as_expr=True)
 
     def get_screenshot(self, path=None, name=None, as_bytes=None, as_base64=None,
                        full_page=False, left_top=None, right_bottom=None):
@@ -867,6 +875,8 @@ class ChromiumBase(BasePage):
         sleep(wait)
         self.browser.reconnect()
         self._driver = self.browser._get_driver(t_id, self)
+        self._driver_init(t_id)
+        self._get_document()
 
     def handle_alert(self, accept=True, send=None, timeout=None, next_one=False):
         """处理提示框，可以自动等待提示框出现
@@ -917,7 +927,7 @@ class ChromiumBase(BasePage):
         """alert出现时触发的方法"""
         self._alert.activated = True
         self._alert.text = kwargs['message']
-        self._alert.type = kwargs['message']
+        self._alert.type = kwargs['type']
         self._alert.defaultPrompt = kwargs.get('defaultPrompt', None)
         self._alert.response_accept = None
         self._alert.response_text = None
@@ -925,6 +935,8 @@ class ChromiumBase(BasePage):
 
         if self._alert.auto is not None:
             self._handle_alert(self._alert.auto)
+        elif Settings.auto_handle_alert is not None:
+            self._handle_alert(Settings.auto_handle_alert)
         elif self._alert.handle_next is not None:
             self._handle_alert(self._alert.handle_next, self._alert.next_text)
             self._alert.handle_next = None
@@ -1206,6 +1218,7 @@ def close_privacy_dialog(page, tid):
                 break
             except KeyError:
                 pass
+            sleep(.05)
         driver.run('DOM.discardSearchResults', searchId=sid)
         r = driver.run('DOM.resolveNode', backendNodeId=r)['object']['objectId']
         r = driver.run('Runtime.callFunctionOn', objectId=r,
@@ -1231,7 +1244,7 @@ def get_mhtml(page, path=None, name=None):
     Path(path).mkdir(parents=True, exist_ok=True)
     name = make_valid_name(name or page.title)
     with open(f'{path}{sep}{name}.mhtml', 'w', encoding='utf-8') as f:
-        f.write(r)
+        f.write(r.replace('\r\n', '\n'))
     return r
 
 

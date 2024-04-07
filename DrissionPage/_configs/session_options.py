@@ -5,13 +5,14 @@
 @Copyright: (c) 2024 by g1879, Inc. All Rights Reserved.
 @License  : BSD 3-Clause.
 """
+from copy import copy
 from pathlib import Path
 
 from requests import Session
 from requests.structures import CaseInsensitiveDict
 
 from .options_manage import OptionsManager
-from .._functions.web import cookies_to_tuple, set_session_cookies
+from .._functions.web import cookies_to_tuple, set_session_cookies, format_headers
 
 
 class SessionOptions(object):
@@ -171,6 +172,7 @@ class SessionOptions(object):
             self._headers = None
             self._del_set.add('headers')
         else:
+            headers = format_headers(headers)
             self._headers = {key.lower(): headers[key] for key in headers}
         return self
 
@@ -211,8 +213,8 @@ class SessionOptions(object):
         return self._cookies
 
     def set_cookies(self, cookies):
-        """设置cookies信息
-        :param cookies: cookies，可为CookieJar, list, tuple, str, dict，传入None可在ini文件标记删除
+        """设置一个或多个cookies信息
+        :param cookies: cookies，可为Cookie, CookieJar, list, tuple, str, dict，传入None可在ini文件标记删除
         :return: 返回当前对象
         """
         cookies = cookies if cookies is None else list(cookies_to_tuple(cookies))
@@ -440,7 +442,7 @@ class SessionOptions(object):
         :param headers: headers
         :return: 当前对象
         """
-        self._headers = CaseInsensitiveDict(**session.headers, **headers) if headers else session.headers
+        self._headers = CaseInsensitiveDict(copy(session.headers).update(headers)) if headers else session.headers
         self._cookies = session.cookies
         self._auth = session.auth
         self._proxies = session.proxies

@@ -6,12 +6,12 @@
 @License  : BSD 3-Clause.
 """
 from json import loads
-from os.path import basename, sep
+from os.path import basename
 from pathlib import Path
 from re import search
 from time import perf_counter, sleep
 
-from DataRecorder.tools import get_usable_path
+from DataRecorder.tools import get_usable_path, make_valid_name
 
 from .none_element import NoneElement
 from .session_element import make_session_ele
@@ -93,6 +93,14 @@ class ChromiumElement(DrissionElement):
     def __eq__(self, other):
         return self._backend_id == getattr(other, '_backend_id', None)
 
+    def __getattr__(self, item):
+        """获取元素属性
+        :param item: 属性名
+        :return: 属性值
+        """
+        a = self.attr(item)
+        return a if a is not None else self.property(item)
+
     @property
     def tag(self):
         """返回元素tag"""
@@ -115,6 +123,10 @@ class ChromiumElement(DrissionElement):
     def attrs(self):
         """返回元素所有attribute属性"""
         try:
+            attrs = self.owner.run_cdp('DOM.getAttributes', nodeId=self._node_id)['attributes']
+            return {attrs[i]: attrs[i + 1] for i in range(0, len(attrs), 2)}
+        except ElementLostError:
+            self._refresh_id()
             attrs = self.owner.run_cdp('DOM.getAttributes', nodeId=self._node_id)['attributes']
             return {attrs[i]: attrs[i + 1] for i in range(0, len(attrs), 2)}
         except CDPError:  # 文档根元素不能调用此方法
@@ -447,10 +459,7 @@ class ChromiumElement(DrissionElement):
         :param index: 获取第几个，从1开始，可传入负数获取倒数第几个
         :return: SessionElement对象或属性、文本
         """
-        if self.tag in __FRAME_ELEMENT__:
-            r = make_session_ele(self.inner_html, locator, index=index)
-        else:
-            r = make_session_ele(self, locator, index=index)
+        r = make_session_ele(self, locator, index=index)
         if isinstance(r, NoneElement):
             if Settings.raise_when_ele_not_found:
                 raise ElementNotFoundError(None, 's_ele()', {'locator': locator})
@@ -464,8 +473,6 @@ class ChromiumElement(DrissionElement):
         :param locator: 定位符
         :return: SessionElement或属性、文本组成的列表
         """
-        if self.tag in __FRAME_ELEMENT__:
-            return make_session_ele(self.inner_html, locator, index=None)
         return make_session_ele(self, locator, index=None)
 
     def _find_elements(self, locator, timeout=None, index=1, relative=False, raise_err=None):
@@ -505,24 +512,27 @@ class ChromiumElement(DrissionElement):
                 sleep(.1)
 
         src = self.attr('src')
+        if not src:
+            raise RuntimeError('元素没有src值或该值为空。')
         if src.lower().startswith('data:image'):
             if base64_to_bytes:
                 from base64 import b64decode
                 return b64decode(src.split(',', 1)[-1])
-
             else:
                 return src.split(',', 1)[-1]
 
         is_blob = src.startswith('blob')
         result = None
         end_time = perf_counter() + timeout
-        while perf_counter() < end_time:
-            if is_blob:
+        if is_blob:
+            while perf_counter() < end_time:
                 result = get_blob(self.owner, src, base64_to_bytes)
                 if result:
                     break
+                sleep(.05)
 
-            else:
+        else:
+            while perf_counter() < end_time:
                 src = self.property('currentSrc')
                 if not src:
                     continue
@@ -534,7 +544,8 @@ class ChromiumElement(DrissionElement):
                     result = self.owner.run_cdp('Page.getResourceContent', frameId=frame, url=src)
                     break
                 except CDPError:
-                    sleep(.1)
+                    pass
+                sleep(.1)
 
         if not result:
             return None
@@ -548,11 +559,12 @@ class ChromiumElement(DrissionElement):
         else:
             return result['content']
 
-    def save(self, path=None, name=None, timeout=None):
+    def save(self, path=None, name=None, timeout=None, rename=True):
         """保存图片或其它有src属性的元素的资源
         :param path: 文件保存路径，为None时保存到当前文件夹
         :param name: 文件名称，为None时从资源url获取
         :param timeout: 等待资源加载的超时时间（秒）
+        :param rename: 遇到重名文件时是否自动重命名
         :return: 返回保存路径
         """
         data = self.src(timeout=timeout)
@@ -565,8 +577,13 @@ class ChromiumElement(DrissionElement):
             if src.lower().startswith('data:image'):
                 r = search(r'data:image/(.*?);base64,', src)
                 name = f'img.{r.group(1)}' if r else None
-        name = name or basename(self.property('currentSrc'))
-        path = get_usable_path(f'{path}{sep}{name}').absolute()
+        path = Path(path) / make_valid_name(name or basename(self.property('currentSrc')))
+        if not path.suffix:
+            path = path.with_suffix('.jpg')
+        if rename:
+            path = get_usable_path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path = path.absolute()
         write_type = 'wb' if isinstance(data, bytes) else 'w'
 
         with open(path, write_type) as f:
@@ -602,7 +619,7 @@ class ChromiumElement(DrissionElement):
         return self.owner._get_screenshot(path, name, as_bytes=as_bytes, as_base64=as_base64, full_page=False,
                                           left_top=left_top, right_bottom=right_bottom, ele=self)
 
-    def input(self, vals, clear=True, by_js=False):
+    def input(self, vals, clear=False, by_js=False):
         """输入文本或组合键，也可用于输入文件路径到input元素（路径间用\n间隔）
         :param vals: 文本值或按键组合
         :param clear: 输入前是否清空文本框
@@ -723,10 +740,15 @@ class ChromiumElement(DrissionElement):
         self._tag = n['localName']
         return n['backendNodeId']
 
+    def _refresh_id(self):
+        """根据backend id刷新其它id"""
+        self._obj_id = self._get_obj_id(backend_id=self._backend_id)
+        self._node_id = self._get_node_id(obj_id=self._obj_id)
+
     def _get_ele_path(self, mode):
         """返获取绝对的css路径或xpath路径"""
         if mode == 'xpath':
-            txt1 = 'var tag = el.nodeName.toLowerCase();'
+            txt1 = 'let tag = el.nodeName.toLowerCase();'
             txt3 = ''' && sib.nodeName.toLowerCase()==tag'''
             txt4 = '''
             if(nth>1){path = '/' + tag + '[' + nth + ']' + path;}
@@ -745,10 +767,10 @@ class ChromiumElement(DrissionElement):
         js = '''function(){
         function e(el) {
             if (!(el instanceof Element)) return;
-            var path = '';
+            let path = '';
             while (el.nodeType === Node.ELEMENT_NODE) {
                 ''' + txt1 + '''
-                    var sib = el, nth = 0;
+                    let sib = el, nth = 0;
                     while (sib) {
                         if(sib.nodeType === Node.ELEMENT_NODE''' + txt3 + '''){nth += 1;}
                         sib = sib.previousSibling;
@@ -1079,7 +1101,7 @@ class ShadowRoot(BaseElement):
                     return None if r is False else r
 
             else:
-                eles = make_session_ele(self.html).eles(loc)
+                eles = make_session_ele(self, loc, index=None)
                 if not eles:
                     return None
 
@@ -1093,8 +1115,8 @@ class ShadowRoot(BaseElement):
                     r = make_chromium_eles(self.owner, _ids=node_id, is_obj_id=False)
                     return None if r is False else r
                 else:
-                    node_ids = [self.owner.run_cdp('DOM.querySelector', nodeId=self._node_id, selector=i)['nodeId']
-                                for i in css]
+                    node_ids = [self.owner.run_cdp('DOM.querySelector',
+                                                   nodeId=self._node_id, selector=i)['nodeId'] for i in css]
                     if 0 in node_ids:
                         return None
                     r = make_chromium_eles(self.owner, _ids=node_ids, index=index, is_obj_id=False)
@@ -1376,8 +1398,8 @@ else{return e.singleNodeValue;}'''
     # 按顺序获取所有元素、节点或属性
     elif type_txt == '7':
         for_txt = """
-var a=new Array();
-for(var i = 0; i <e.snapshotLength ; i++){
+let a=new Array();
+for(let i = 0; i <e.snapshotLength ; i++){
 if(e.snapshotItem(i).constructor.name=="Text"){a.push(e.snapshotItem(i).data);}
 else if(e.snapshotItem(i).constructor.name=="Attr"){a.push(e.snapshotItem(i).nodeValue);}
 else if(e.snapshotItem(i).constructor.name=="Comment"){a.push(e.snapshotItem(i).nodeValue);}
@@ -1392,7 +1414,7 @@ else{a.push(e.snapshotItem(i));}}"""
         return_txt = 'return e.singleNodeValue;'
 
     xpath = xpath.replace(r"'", r"\'")
-    js = f'function(){{var e=document.evaluate(\'{xpath}\',{node_txt},null,{type_txt},null);\n{for_txt}\n{return_txt}}}'
+    js = f'function(){{let e=document.evaluate(\'{xpath}\',{node_txt},null,{type_txt},null);\n{for_txt}\n{return_txt}}}'
 
     return js
 
@@ -1418,6 +1440,7 @@ def run_js(page_or_ele, script, as_expr, timeout, args=None):
             obj_id = page_or_ele._root_id
             if obj_id is not None:
                 break
+            sleep(.01)
         else:
             raise RuntimeError('js运行环境出错。')
 
@@ -1518,7 +1541,7 @@ def convert_argument(arg):
     if isinstance(arg, ChromiumElement):
         return {'objectId': arg._obj_id}
 
-    elif isinstance(arg, (int, float, str, bool)):
+    elif isinstance(arg, (int, float, str, bool, dict)):
         return {'value': arg}
 
     from math import inf

@@ -21,13 +21,13 @@ from ..errors import WaitTimeoutError
 class Listener(object):
     """监听器基类"""
 
-    def __init__(self, page):
+    def __init__(self, owner):
         """
-        :param page: ChromiumBase对象
+        :param owner: ChromiumBase对象
         """
-        self._page = page
-        self._address = page.address
-        self._target_id = page._target_id
+        self._owner = owner
+        self._address = owner.address
+        self._target_id = owner._target_id
         self._driver = None
         self._running_requests = 0
         self._running_targets = 0
@@ -167,7 +167,7 @@ class Listener(object):
         caught = 0
         end = perf_counter() + timeout if timeout else None
         while True:
-            if timeout and perf_counter() > end:
+            if (timeout and perf_counter() > end) or self._driver._stopped.is_set():
                 return
             if self._caught.qsize() >= gap:
                 yield self._caught.get_nowait() if gap == 1 else [self._caught.get_nowait() for _ in range(gap)]
@@ -216,37 +216,40 @@ class Listener(object):
         self._running_requests = 0
         self._running_targets = 0
 
-    def wait_silent(self, timeout=None, targets_only=False):
+    def wait_silent(self, timeout=None, targets_only=False, limit=0):
         """等待所有请求结束
         :param timeout: 超时，为None时无限等待
         :param targets_only: 是否只等待targets指定的请求结束
+        :param limit: 剩下多少个连接时视为结束
         :return: 返回是否等待成功
         """
         if not self.listening:
             raise RuntimeError('监听未启动或已暂停。')
         if timeout is None:
-            while (not targets_only and self._running_requests > 0) or (targets_only and self._running_targets > 0):
+            while ((not targets_only and self._running_requests > limit)
+                   or (targets_only and self._running_targets > limit)):
                 sleep(.1)
             return True
 
         end_time = perf_counter() + timeout
         while perf_counter() < end_time:
-            if (not targets_only and self._running_requests <= 0) or (targets_only and self._running_targets <= 0):
+            if ((not targets_only and self._running_requests <= limit)
+                    or (targets_only and self._running_targets <= limit)):
                 return True
             sleep(.1)
         else:
             return False
 
-    def _to_target(self, target_id, address, page):
+    def _to_target(self, target_id, address, owner):
         """切换监听的页面对象
         :param target_id: 新页面对象_target_id
         :param address: 新页面对象address
-        :param page: 新页面对象
+        :param owner: 新页面对象
         :return: None
         """
         self._target_id = target_id
         self._address = address
-        self._page = page
+        self._owner = owner
         debug = False
         if self._driver:
             debug = self._driver._debug
@@ -275,7 +278,7 @@ class Listener(object):
                     and (self._res_type is True or kwargs.get('type', '').upper() in self._res_type)):
                 self._running_targets += 1
                 rid = kwargs['requestId']
-                p = self._request_ids.setdefault(rid, DataPacket(self._page.tab_id, True))
+                p = self._request_ids.setdefault(rid, DataPacket(self._owner.tab_id, True))
                 p._raw_request = kwargs
                 if kwargs['request'].get('hasPostData', None) and not kwargs['request'].get('postData', None):
                     p._raw_post_data = self._driver.run('Network.getRequestPostData',
@@ -289,7 +292,7 @@ class Listener(object):
                         and (self._method is True or kwargs['request']['method'] in self._method)
                         and (self._res_type is True or kwargs.get('type', '').upper() in self._res_type)):
                     self._running_targets += 1
-                    p = self._request_ids.setdefault(rid, DataPacket(self._page.tab_id, target))
+                    p = self._request_ids.setdefault(rid, DataPacket(self._owner.tab_id, target))
                     p._raw_request = kwargs
                     break
 
@@ -390,13 +393,13 @@ class Listener(object):
 class FrameListener(Listener):
     def _requestWillBeSent(self, **kwargs):
         """接收到请求时的回调函数"""
-        if not self._page._is_diff_domain and kwargs.get('frameId', None) != self._page._frame_id:
+        if not self._owner._is_diff_domain and kwargs.get('frameId', None) != self._owner._frame_id:
             return
         super()._requestWillBeSent(**kwargs)
 
     def _response_received(self, **kwargs):
         """接收到返回信息时处理方法"""
-        if not self._page._is_diff_domain and kwargs.get('frameId', None) != self._page._frame_id:
+        if not self._owner._is_diff_domain and kwargs.get('frameId', None) != self._owner._frame_id:
             return
         super()._response_received(**kwargs)
 
@@ -529,7 +532,13 @@ class Request(object):
         return self._postData
 
     @property
+    def cookies(self):
+        """以list形式返回发送的cookies"""
+        return [c['cookie'] for c in self.extra_info.associatedCookies if not c['blockedReasons']]
+
+    @property
     def extra_info(self):
+        """返回额外数据"""
         return RequestExtraInfo(self._data_packet._request_extra_info or {})
 
 
